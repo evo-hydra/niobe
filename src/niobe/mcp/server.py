@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from niobe.config import NiobeConfig
 from niobe.mcp.formatters import (
     format_diff,
@@ -12,14 +14,16 @@ from niobe.mcp.formatters import (
 )
 
 
-def create_server():
-    """Create and return a configured FastMCP server instance."""
+def create_server(config: NiobeConfig | None = None):
+    """Create and return a configured FastMCP server instance.
+
+    Args:
+        config: Optional pre-loaded config. If None, loads from cwd.
+    """
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("niobe", description="Runtime intelligence for AI agents")
-
-    def _get_config() -> NiobeConfig:
-        return NiobeConfig.load()
+    _config = config or NiobeConfig.load()
 
     @mcp.tool()
     def niobe_register(
@@ -39,15 +43,14 @@ def create_server():
         from niobe.core.store import NiobeStore
         from niobe.models.runtime import ServiceInfo
 
-        config = _get_config()
         paths = tuple(log_paths) if log_paths else ()
         service = ServiceInfo(name=name, pid=pid, port=port, log_paths=paths)
 
         try:
-            with NiobeStore(config.db_path) as store:
+            with NiobeStore(_config.db_path) as store:
                 store.register_service(service)
                 all_services = store.list_services()
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return f"Error registering service: {exc}"
 
         registration = format_registration(name, pid, port, log_paths)
@@ -66,22 +69,20 @@ def create_server():
         from niobe.core.snapshot import create_all_snapshots, create_snapshot
         from niobe.core.store import NiobeStore
 
-        config = _get_config()
-
         try:
-            with NiobeStore(config.db_path) as store:
+            with NiobeStore(_config.db_path) as store:
                 if service:
                     svc = store.get_service(service)
                     if svc is None:
                         return f"Service '{service}' not found. Use niobe_register first."
-                    snap = create_snapshot(store, svc, config)
+                    snap = create_snapshot(store, svc, _config)
                     return format_snapshots([snap])
                 else:
-                    snaps = create_all_snapshots(store, config)
+                    snaps = create_all_snapshots(store, _config)
                     if not snaps:
                         return "No services registered. Use niobe_register first."
                     return format_snapshots(snaps)
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return f"Error taking snapshot: {exc}"
 
     @mcp.tool()
@@ -95,12 +96,10 @@ def create_server():
         from niobe.core.snapshot import compare_snapshots
         from niobe.core.store import NiobeStore
 
-        config = _get_config()
-
         try:
-            with NiobeStore(config.db_path) as store:
+            with NiobeStore(_config.db_path) as store:
                 diff = compare_snapshots(store, snapshot_a, snapshot_b)
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return f"Error comparing snapshots: {exc}"
 
         if diff is None:
@@ -110,26 +109,27 @@ def create_server():
     @mcp.tool()
     def niobe_errors(
         service: str | None = None,
-        since: int = 5,
-        limit: int = 50,
+        since: int | None = None,
+        limit: int | None = None,
     ) -> str:
         """Get recent errors from ingested logs.
 
         Args:
             service: Filter by service name (optional)
-            since: Look back N minutes (default: 5)
-            limit: Max entries to return (default: 50)
+            since: Look back N minutes (default from config)
+            limit: Max entries to return (default from config)
         """
         from niobe.core.store import NiobeStore
 
-        config = _get_config()
+        since_val = since if since is not None else _config.mcp.default_error_since_minutes
+        limit_val = limit if limit is not None else _config.mcp.default_query_limit
 
         try:
-            with NiobeStore(config.db_path) as store:
+            with NiobeStore(_config.db_path) as store:
                 entries = store.recent_errors(
-                    service_name=service, since_minutes=since, limit=limit
+                    service_name=service, since_minutes=since_val, limit=limit_val
                 )
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return f"Error fetching errors: {exc}"
 
         return format_log_entries(entries, title="Recent Errors")
@@ -139,7 +139,7 @@ def create_server():
         query: str,
         service: str | None = None,
         level: str | None = None,
-        limit: int = 50,
+        limit: int | None = None,
     ) -> str:
         """Full-text search across ingested log entries.
 
@@ -147,18 +147,18 @@ def create_server():
             query: FTS5 search query (supports AND, OR, NOT, phrase "quotes")
             service: Filter by service name (optional)
             level: Filter by log level: critical, error, warning, info, debug (optional)
-            limit: Max entries to return (default: 50)
+            limit: Max entries to return (default from config)
         """
         from niobe.core.store import NiobeStore
 
-        config = _get_config()
+        limit_val = limit if limit is not None else _config.mcp.default_query_limit
 
         try:
-            with NiobeStore(config.db_path) as store:
+            with NiobeStore(_config.db_path) as store:
                 entries = store.search_logs(
-                    query=query, service_name=service, level=level, limit=limit
+                    query=query, service_name=service, level=level, limit=limit_val
                 )
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return f"Error searching logs: {exc}"
 
         return format_log_entries(entries, title=f'Search: "{query}"')

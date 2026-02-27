@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from niobe.models import (
@@ -14,7 +15,13 @@ from niobe.models import (
     ServiceInfo,
 )
 
+logger = logging.getLogger("niobe.store")
+
 SCHEMA_VERSION = "1"
+
+# Ordered list of migration functions keyed by target version.
+# Each function receives a sqlite3.Connection and migrates from (version - 1).
+_MIGRATIONS: dict[str, callable] = {}
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS niobe_meta (
@@ -138,16 +145,44 @@ class NiobeStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
-        # Set schema version if not present
-        cur = self._conn.execute(
+        self._ensure_schema_version()
+        self._run_migrations()
+
+    def _ensure_schema_version(self) -> None:
+        """Set schema version on first run."""
+        cur = self.conn.execute(
             "SELECT value FROM niobe_meta WHERE key='schema_version'"
         )
         if cur.fetchone() is None:
-            self._conn.execute(
+            self.conn.execute(
                 "INSERT INTO niobe_meta(key, value) VALUES ('schema_version', ?)",
                 (SCHEMA_VERSION,),
             )
-            self._conn.commit()
+            self.conn.commit()
+
+    def _run_migrations(self) -> None:
+        """Apply any pending migrations sequentially."""
+        current = self.get_meta("schema_version") or "0"
+        if current == SCHEMA_VERSION:
+            return
+
+        current_int = int(current)
+        target_int = int(SCHEMA_VERSION)
+
+        for version_num in range(current_int + 1, target_int + 1):
+            version_key = str(version_num)
+            migrate_fn = _MIGRATIONS.get(version_key)
+            if migrate_fn is None:
+                raise RuntimeError(
+                    f"Missing migration for schema version {version_key}"
+                )
+            logger.info("Migrating store schema to version %s", version_key)
+            migrate_fn(self.conn)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO niobe_meta(key, value) VALUES ('schema_version', ?)",
+                (version_key,),
+            )
+            self.conn.commit()
 
     def close(self) -> None:
         if self._conn:
@@ -336,12 +371,7 @@ class NiobeStore:
         since_minutes: int = 5,
         limit: int = 50,
     ) -> list[LogEntry]:
-        cutoff = datetime.now(timezone.utc).isoformat()
-        # We compute cutoff in Python for clarity
-        from datetime import timedelta
-
-        cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
-        cutoff = cutoff_dt.isoformat()
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
 
         sql = """
             SELECT service_name, timestamp, level, message,
@@ -350,7 +380,7 @@ class NiobeStore:
             WHERE level IN ('critical', 'error')
               AND ingested_at >= ?
         """
-        params: list = [cutoff]
+        params: list = [_iso(cutoff)]
         if service_name:
             sql += " AND service_name = ?"
             params.append(service_name)
@@ -371,9 +401,20 @@ class NiobeStore:
             for r in cur.fetchall()
         ]
 
+    def count_errors_since(
+        self, service_name: str, since: datetime
+    ) -> int:
+        """Count error/critical log entries since a given time."""
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM log_entries WHERE service_name=? AND level IN ('critical','error') AND ingested_at>=?",
+            (service_name, _iso(since)),
+        )
+        return cur.fetchone()[0]
+
     def count_logs_since(
         self, service_name: str, since: datetime
     ) -> int:
+        """Count all log entries since a given time."""
         cur = self.conn.execute(
             "SELECT COUNT(*) FROM log_entries WHERE service_name=? AND ingested_at>=?",
             (service_name, _iso(since)),

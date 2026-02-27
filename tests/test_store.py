@@ -159,6 +159,27 @@ class TestLogs:
         past = datetime.now(timezone.utc) - timedelta(hours=1)
         assert store.count_logs_since("web", past) == 2
 
+    def test_count_errors_since(self, store, sample_service):
+        store.register_service(sample_service)
+        entries = [
+            LogEntry(
+                service_name="web", level="error",
+                message="err1", source_file="a.log", raw_line="e1",
+            ),
+            LogEntry(
+                service_name="web", level="critical",
+                message="crit1", source_file="a.log", raw_line="c1",
+            ),
+            LogEntry(
+                service_name="web", level="info",
+                message="ok", source_file="a.log", raw_line="ok",
+            ),
+        ]
+        store.insert_log_entries(entries)
+        from datetime import timedelta
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        assert store.count_errors_since("web", past) == 2
+
     def test_insert_empty(self, store):
         assert store.insert_log_entries([]) == 0
 
@@ -173,6 +194,23 @@ class TestMeta:
 
     def test_schema_version(self, store):
         assert store.get_meta("schema_version") == "1"
+
+
+class TestMigrations:
+    def test_no_migration_needed(self, tmp_path):
+        """Fresh DB already at current version — no migration runs."""
+        db_path = tmp_path / "mig.db"
+        with NiobeStore(db_path) as store:
+            assert store.get_meta("schema_version") == "1"
+
+    def test_migration_scaffolding_noop(self, tmp_path):
+        """Re-opening an existing DB at same version is a no-op."""
+        db_path = tmp_path / "mig.db"
+        with NiobeStore(db_path) as store:
+            store.set_meta("test_key", "before")
+        with NiobeStore(db_path) as store:
+            assert store.get_meta("test_key") == "before"
+            assert store.get_meta("schema_version") == "1"
 
 
 class TestContextManager:

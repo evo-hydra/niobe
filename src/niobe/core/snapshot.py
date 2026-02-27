@@ -35,15 +35,7 @@ def create_snapshot(
     # 3. Count recent errors
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=snap_config.error_window_minutes)
-    error_count = 0
-    try:
-        cur = store.conn.execute(
-            "SELECT COUNT(*) FROM log_entries WHERE service_name=? AND level IN ('critical','error') AND ingested_at>=?",
-            (service.name, window_start.isoformat()),
-        )
-        error_count = cur.fetchone()[0]
-    except Exception:
-        logger.debug("Could not count errors for %s", service.name)
+    error_count = store.count_errors_since(service.name, window_start)
 
     # 4. Calculate log rate (lines per second in window)
     total_logs = store.count_logs_since(service.name, window_start)

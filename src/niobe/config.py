@@ -36,6 +36,14 @@ class SnapshotConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class McpConfig:
+    """Defaults for MCP tool parameters."""
+
+    default_error_since_minutes: int = 5
+    default_query_limit: int = 50
+
+
+@dataclass(frozen=True, slots=True)
 class NiobeConfig:
     """Top-level configuration container."""
 
@@ -43,6 +51,7 @@ class NiobeConfig:
     store: StoreConfig = field(default_factory=StoreConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
 
     @property
     def niobe_dir(self) -> Path:
@@ -67,10 +76,13 @@ class NiobeConfig:
         ingestion_data = toml_data.get("ingestion", {})
         snapshot_data = toml_data.get("snapshot", {})
 
+        mcp_data = toml_data.get("mcp", {})
+
         # Use literal defaults (slots=True prevents class-level attribute access)
         _store_defaults = StoreConfig()
         _ingest_defaults = IngestionConfig()
         _snap_defaults = SnapshotConfig()
+        _mcp_defaults = McpConfig()
 
         store = StoreConfig(
             db_name=os.environ.get(
@@ -117,9 +129,31 @@ class NiobeConfig:
             ),
         )
 
+        mcp = McpConfig(
+            default_error_since_minutes=int(
+                os.environ.get(
+                    "NIOBE_DEFAULT_ERROR_SINCE_MINUTES",
+                    mcp_data.get(
+                        "default_error_since_minutes",
+                        _mcp_defaults.default_error_since_minutes,
+                    ),
+                )
+            ),
+            default_query_limit=int(
+                os.environ.get(
+                    "NIOBE_DEFAULT_QUERY_LIMIT",
+                    mcp_data.get(
+                        "default_query_limit",
+                        _mcp_defaults.default_query_limit,
+                    ),
+                )
+            ),
+        )
+
         return cls(
             project_path=project,
             store=store,
             ingestion=ingestion,
             snapshot=snapshot,
+            mcp=mcp,
         )
