@@ -1,17 +1,35 @@
-"""FastMCP server factory with 5 tools for runtime observation."""
+"""FastMCP server factory with 8 tools for runtime observation."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from niobe.config import NiobeConfig
 from niobe.mcp.formatters import (
+    format_anomalies,
+    format_audit,
     format_diff,
+    format_feedback,
     format_log_entries,
     format_registration,
     format_services,
     format_snapshots,
 )
+
+
+def _audit(store, tool_name: str, params: dict, result: str) -> None:
+    """Record a tool invocation in the audit log."""
+    from niobe.models.runtime import AuditEntry
+
+    # Truncate result summary for storage
+    summary = result[:500] if len(result) > 500 else result
+    entry = AuditEntry(
+        tool_name=tool_name,
+        parameters=json.dumps(params, default=str),
+        result_summary=summary,
+    )
+    store.log_audit(entry)
 
 
 def create_server(config: NiobeConfig | None = None):
@@ -50,12 +68,12 @@ def create_server(config: NiobeConfig | None = None):
             with NiobeStore(_config.db_path) as store:
                 store.register_service(service)
                 all_services = store.list_services()
+                result = format_registration(name, pid, port, log_paths)
+                result += "\n\n" + format_services(all_services)
+                _audit(store, "niobe_register", {"name": name, "pid": pid, "port": port}, result)
+                return result
         except (sqlite3.Error, OSError) as exc:
             return f"Error registering service: {exc}"
-
-        registration = format_registration(name, pid, port, log_paths)
-        services_table = format_services(all_services)
-        return f"{registration}\n\n{services_table}"
 
     @mcp.tool()
     def niobe_snapshot(service: str | None = None) -> str:
@@ -76,12 +94,14 @@ def create_server(config: NiobeConfig | None = None):
                     if svc is None:
                         return f"Service '{service}' not found. Use niobe_register first."
                     snap = create_snapshot(store, svc, _config)
-                    return format_snapshots([snap])
+                    result = format_snapshots([snap])
                 else:
                     snaps = create_all_snapshots(store, _config)
                     if not snaps:
                         return "No services registered. Use niobe_register first."
-                    return format_snapshots(snaps)
+                    result = format_snapshots(snaps)
+                _audit(store, "niobe_snapshot", {"service": service}, result)
+                return result
         except (sqlite3.Error, OSError) as exc:
             return f"Error taking snapshot: {exc}"
 
@@ -99,12 +119,13 @@ def create_server(config: NiobeConfig | None = None):
         try:
             with NiobeStore(_config.db_path) as store:
                 diff = compare_snapshots(store, snapshot_a, snapshot_b)
+                if diff is None:
+                    return "Could not compare: snapshot(s) not found or service mismatch."
+                result = format_diff(diff)
+                _audit(store, "niobe_compare", {"a": snapshot_a, "b": snapshot_b}, result)
+                return result
         except (sqlite3.Error, OSError) as exc:
             return f"Error comparing snapshots: {exc}"
-
-        if diff is None:
-            return "Could not compare: snapshot(s) not found or service mismatch."
-        return format_diff(diff)
 
     @mcp.tool()
     def niobe_errors(
@@ -129,10 +150,11 @@ def create_server(config: NiobeConfig | None = None):
                 entries = store.recent_errors(
                     service_name=service, since_minutes=since_val, limit=limit_val
                 )
+                result = format_log_entries(entries, title="Recent Errors")
+                _audit(store, "niobe_errors", {"service": service, "since": since_val}, result)
+                return result
         except (sqlite3.Error, OSError) as exc:
             return f"Error fetching errors: {exc}"
-
-        return format_log_entries(entries, title="Recent Errors")
 
     @mcp.tool()
     def niobe_logs(
@@ -158,10 +180,113 @@ def create_server(config: NiobeConfig | None = None):
                 entries = store.search_logs(
                     query=query, service_name=service, level=level, limit=limit_val
                 )
+                result = format_log_entries(entries, title=f'Search: "{query}"')
+                _audit(store, "niobe_logs", {"query": query, "service": service}, result)
+                return result
         except (sqlite3.Error, OSError) as exc:
             return f"Error searching logs: {exc}"
 
-        return format_log_entries(entries, title=f'Search: "{query}"')
+    @mcp.tool()
+    def niobe_anomalies(
+        service: str | None = None,
+        since: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        """Get active anomalies — metrics that exceed baseline mean + 2σ.
+
+        Anomalies are detected automatically during snapshots once enough
+        baseline samples exist (minimum 3 snapshots per service).
+
+        Args:
+            service: Filter by service name (optional)
+            since: Look back N minutes (default 30)
+            limit: Max entries to return (default from config)
+        """
+        from niobe.core.store import NiobeStore
+
+        since_val = since if since is not None else 30
+        limit_val = limit if limit is not None else _config.mcp.default_query_limit
+
+        try:
+            with NiobeStore(_config.db_path) as store:
+                entries = store.recent_anomalies(
+                    service_name=service, since_minutes=since_val, limit=limit_val
+                )
+                result = format_anomalies(entries)
+                _audit(store, "niobe_anomalies", {"service": service, "since": since_val}, result)
+                return result
+        except (sqlite3.Error, OSError) as exc:
+            return f"Error fetching anomalies: {exc}"
+
+    @mcp.tool()
+    def niobe_feedback(
+        target_id: str,
+        outcome: str,
+        target_type: str = "snapshot",
+        context: str = "",
+    ) -> str:
+        """Submit feedback on a snapshot or comparison result.
+
+        Helps Niobe learn which observations are useful.
+
+        Args:
+            target_id: Snapshot ID or comparison key to give feedback on
+            outcome: One of: accepted, rejected, modified
+            target_type: Type of target: snapshot or comparison (default: snapshot)
+            context: Optional explanation of why
+        """
+        from niobe.core.store import NiobeStore
+        from niobe.models.runtime import Feedback
+
+        if outcome not in ("accepted", "rejected", "modified"):
+            return f"Invalid outcome '{outcome}'. Must be: accepted, rejected, modified."
+
+        if target_type not in ("snapshot", "comparison"):
+            return f"Invalid target_type '{target_type}'. Must be: snapshot, comparison."
+
+        fb = Feedback(
+            target_id=target_id,
+            target_type=target_type,
+            outcome=outcome,
+            context=context,
+        )
+
+        try:
+            with NiobeStore(_config.db_path) as store:
+                store.save_feedback(fb)
+                result = f"Feedback recorded: **{outcome}** on {target_type} `{target_id[:12]}`"
+                if context:
+                    result += f"\nContext: {context}"
+                _audit(store, "niobe_feedback", {"target_id": target_id, "outcome": outcome}, result)
+                return result
+        except (sqlite3.Error, OSError) as exc:
+            return f"Error saving feedback: {exc}"
+
+    @mcp.tool()
+    def niobe_audit(
+        tool_name: str | None = None,
+        since: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        """Query the local audit log of all Niobe tool invocations.
+
+        Args:
+            tool_name: Filter by tool name (optional)
+            since: Look back N minutes (optional)
+            limit: Max entries to return (default from config)
+        """
+        from niobe.core.store import NiobeStore
+
+        limit_val = limit if limit is not None else _config.mcp.default_query_limit
+
+        try:
+            with NiobeStore(_config.db_path) as store:
+                entries = store.query_audit(
+                    tool_name=tool_name, since_minutes=since, limit=limit_val
+                )
+                return format_audit(entries)
+        except (sqlite3.Error, OSError) as exc:
+            return f"Error querying audit log: {exc}"
 
     return mcp
 

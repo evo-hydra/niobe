@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from niobe.models.runtime import (
+    Anomaly,
+    AuditEntry,
+    Feedback,
     HealthSnapshot,
     LogEntry,
     ServiceInfo,
@@ -129,4 +132,60 @@ def format_registration(
         lines.append(f"- Port: {port}")
     if log_paths:
         lines.append(f"- Log paths: {', '.join(log_paths)}")
+    return "\n".join(lines)
+
+
+def format_anomalies(anomalies: list[Anomaly], title: str = "Anomalies") -> str:
+    """Format detected anomalies as a table."""
+    if not anomalies:
+        return f"## {title}\n\nNo anomalies detected."
+
+    lines = [
+        f"## {title}",
+        "",
+        "| Service | Metric | Value | Mean | StdDev | Deviation | Time |",
+        "|---------|--------|-------|------|--------|-----------|------|",
+    ]
+    for a in anomalies:
+        sign = "+" if a.deviation > 0 else ""
+        lines.append(
+            f"| {a.service_name} | {a.metric} | {a.current_value} "
+            f"| {a.baseline_mean} | {a.baseline_stddev} "
+            f"| {sign}{a.deviation}σ | {a.detected_at.isoformat()} |"
+        )
+    return "\n".join(lines)
+
+
+def format_feedback(entries: list[Feedback], title: str = "Feedback") -> str:
+    """Format feedback entries as a bulleted list."""
+    if not entries:
+        return f"## {title}\n\nNo feedback recorded."
+
+    lines = [f"## {title}", ""]
+    for f in entries:
+        lines.append(
+            f"- **[{f.outcome}]** `{f.target_type}:{f.target_id[:12]}` "
+            f"— {f.context or '(no comment)'} ({f.created_at.isoformat()})"
+        )
+    return "\n".join(lines)
+
+
+def format_audit(entries: list[AuditEntry], title: str = "Audit Log") -> str:
+    """Format audit log entries as a table."""
+    if not entries:
+        return f"## {title}\n\nNo audit entries found."
+
+    lines = [
+        f"## {title}",
+        "",
+        "| Time | Tool | Parameters | Result |",
+        "|------|------|------------|--------|",
+    ]
+    for e in entries:
+        # Truncate long params/results for readability
+        params = e.parameters[:80] + "..." if len(e.parameters) > 80 else e.parameters
+        result = e.result_summary[:80] + "..." if len(e.result_summary) > 80 else e.result_summary
+        lines.append(
+            f"| {e.created_at.isoformat()} | {e.tool_name} | {params} | {result} |"
+        )
     return "\n".join(lines)

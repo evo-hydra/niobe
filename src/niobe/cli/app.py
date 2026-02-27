@@ -242,6 +242,104 @@ def ingest(
             console.print(f"[green]Ingested {count} log entries for {service}[/green]")
 
 
+@app.command()
+def anomalies(
+    service: Annotated[Optional[str], typer.Option("--service", "-s", help="Filter by service")] = None,
+    since: Annotated[int, typer.Option("--since", help="Minutes to look back")] = 30,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Max entries")] = 50,
+) -> None:
+    """Show detected anomalies (metrics exceeding baseline + 2σ)."""
+    config = _config()
+
+    with _open_store(config) as store:
+        entries = store.recent_anomalies(service_name=service, since_minutes=since, limit=limit)
+
+    if not entries:
+        console.print("[dim]No anomalies detected.[/dim]")
+        return
+
+    from rich.table import Table
+
+    table = Table(title="Anomalies")
+    table.add_column("Service", style="bold")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_column("Mean", justify="right")
+    table.add_column("σ", justify="right")
+    table.add_column("Deviation", justify="right")
+
+    for a in entries:
+        sign = "+" if a.deviation > 0 else ""
+        table.add_row(
+            a.service_name,
+            a.metric,
+            f"{a.current_value:.2f}",
+            f"{a.baseline_mean:.2f}",
+            f"{a.baseline_stddev:.2f}",
+            f"[red]{sign}{a.deviation:.1f}σ[/red]",
+        )
+    console.print(table)
+
+
+@app.command()
+def feedback(
+    target_id: str,
+    outcome: Annotated[str, typer.Argument(help="accepted, rejected, or modified")],
+    target_type: Annotated[str, typer.Option("--type", "-t", help="snapshot or comparison")] = "snapshot",
+    context: Annotated[Optional[str], typer.Option("--context", "-c", help="Explanation")] = None,
+) -> None:
+    """Submit feedback on a snapshot or comparison."""
+    from niobe.models.runtime import Feedback
+
+    if outcome not in ("accepted", "rejected", "modified"):
+        console.print(f"[red]Invalid outcome:[/red] {outcome}")
+        raise typer.Exit(1)
+
+    fb = Feedback(
+        target_id=target_id,
+        target_type=target_type,
+        outcome=outcome,
+        context=context or "",
+    )
+    config = _config()
+
+    with _open_store(config) as store:
+        store.save_feedback(fb)
+
+    console.print(f"[green]Feedback recorded:[/green] {outcome} on {target_type} {target_id[:12]}")
+
+
+@app.command()
+def audit(
+    tool_name: Annotated[Optional[str], typer.Option("--tool", "-t", help="Filter by tool name")] = None,
+    since: Annotated[Optional[int], typer.Option("--since", help="Minutes to look back")] = None,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Max entries")] = 50,
+) -> None:
+    """Query the audit log of tool invocations."""
+    config = _config()
+
+    with _open_store(config) as store:
+        entries = store.query_audit(tool_name=tool_name, since_minutes=since, limit=limit)
+
+    if not entries:
+        console.print("[dim]No audit entries found.[/dim]")
+        return
+
+    from rich.table import Table
+
+    table = Table(title="Audit Log")
+    table.add_column("Time")
+    table.add_column("Tool", style="bold")
+    table.add_column("Parameters")
+    table.add_column("Result")
+
+    for e in entries:
+        params = e.parameters[:60] + "..." if len(e.parameters) > 60 else e.parameters
+        result = e.result_summary[:60] + "..." if len(e.result_summary) > 60 else e.result_summary
+        table.add_row(e.created_at.isoformat(), e.tool_name, params, result)
+    console.print(table)
+
+
 def main() -> None:
     """Entry point for the niobe CLI."""
     app()

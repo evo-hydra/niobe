@@ -52,6 +52,16 @@ def create_snapshot(
         log_rate=log_rate,
     )
     store.save_snapshot(snap)
+
+    # 6. Update baselines and check for anomalies
+    try:
+        from niobe.core.anomaly import detect_anomalies, update_baselines
+
+        update_baselines(store, snap)
+        detect_anomalies(store, snap)
+    except Exception:
+        logger.debug("Anomaly detection skipped", exc_info=True)
+
     return snap
 
 

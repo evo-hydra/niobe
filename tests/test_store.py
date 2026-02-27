@@ -193,7 +193,7 @@ class TestMeta:
         assert store.get_meta("nope") is None
 
     def test_schema_version(self, store):
-        assert store.get_meta("schema_version") == "1"
+        assert store.get_meta("schema_version") == "2"
 
 
 class TestMigrations:
@@ -201,7 +201,7 @@ class TestMigrations:
         """Fresh DB already at current version — no migration runs."""
         db_path = tmp_path / "mig.db"
         with NiobeStore(db_path) as store:
-            assert store.get_meta("schema_version") == "1"
+            assert store.get_meta("schema_version") == "2"
 
     def test_migration_scaffolding_noop(self, tmp_path):
         """Re-opening an existing DB at same version is a no-op."""
@@ -210,7 +210,7 @@ class TestMigrations:
             store.set_meta("test_key", "before")
         with NiobeStore(db_path) as store:
             assert store.get_meta("test_key") == "before"
-            assert store.get_meta("schema_version") == "1"
+            assert store.get_meta("schema_version") == "2"
 
 
 class TestContextManager:

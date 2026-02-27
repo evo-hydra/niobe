@@ -9,19 +9,77 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from niobe.models import (
+    Anomaly,
+    AuditEntry,
+    Feedback,
     HealthSnapshot,
     LogEntry,
+    MetricBaseline,
     ProcessMetrics,
     ServiceInfo,
 )
 
 logger = logging.getLogger("niobe.store")
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Add baselines, anomalies, feedback, and audit_log tables."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS metric_baselines (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name TEXT NOT NULL REFERENCES services(name),
+            metric      TEXT NOT NULL,
+            mean        REAL NOT NULL,
+            stddev      REAL NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            updated_at  TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_baselines_service_metric
+            ON metric_baselines(service_name, metric);
+
+        CREATE TABLE IF NOT EXISTS anomalies (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name  TEXT NOT NULL REFERENCES services(name),
+            metric        TEXT NOT NULL,
+            current_value REAL NOT NULL,
+            baseline_mean REAL NOT NULL,
+            baseline_stddev REAL NOT NULL,
+            deviation     REAL NOT NULL,
+            detected_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_anomalies_service_time
+            ON anomalies(service_name, detected_at);
+
+        CREATE TABLE IF NOT EXISTS feedback (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_id   TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            outcome     TEXT NOT NULL,
+            context     TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_target
+            ON feedback(target_id, target_type);
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_name      TEXT NOT NULL,
+            parameters     TEXT NOT NULL DEFAULT '{}',
+            result_summary TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_time
+            ON audit_log(created_at);
+    """)
+
 
 # Ordered list of migration functions keyed by target version.
 # Each function receives a sqlite3.Connection and migrates from (version - 1).
-_MIGRATIONS: dict[str, callable] = {}
+_MIGRATIONS: dict[str, callable] = {
+    "2": _migrate_to_v2,
+}
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS niobe_meta (
@@ -81,6 +139,56 @@ CREATE TRIGGER IF NOT EXISTS log_fts_au AFTER UPDATE ON log_entries BEGIN
     INSERT INTO log_fts(log_fts, rowid, message) VALUES ('delete', old.id, old.message);
     INSERT INTO log_fts(rowid, message) VALUES (new.id, new.message);
 END;
+
+-- v2: Metric baselines for anomaly detection
+CREATE TABLE IF NOT EXISTS metric_baselines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_name TEXT NOT NULL REFERENCES services(name),
+    metric       TEXT NOT NULL,
+    mean         REAL NOT NULL,
+    stddev       REAL NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_baselines_service_metric
+    ON metric_baselines(service_name, metric);
+
+-- v2: Detected anomalies
+CREATE TABLE IF NOT EXISTS anomalies (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_name    TEXT NOT NULL REFERENCES services(name),
+    metric          TEXT NOT NULL,
+    current_value   REAL NOT NULL,
+    baseline_mean   REAL NOT NULL,
+    baseline_stddev REAL NOT NULL,
+    deviation       REAL NOT NULL,
+    detected_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_anomalies_service_time
+    ON anomalies(service_name, detected_at);
+
+-- v2: User feedback
+CREATE TABLE IF NOT EXISTS feedback (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id   TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    outcome     TEXT NOT NULL,
+    context     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_target
+    ON feedback(target_id, target_type);
+
+-- v2: Audit log
+CREATE TABLE IF NOT EXISTS audit_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name      TEXT NOT NULL,
+    parameters     TEXT NOT NULL DEFAULT '{}',
+    result_summary TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_time
+    ON audit_log(created_at);
 """
 
 
@@ -420,6 +528,186 @@ class NiobeStore:
             (service_name, _iso(since)),
         )
         return cur.fetchone()[0]
+
+    # --- Baselines ---
+
+    def upsert_baseline(self, baseline: MetricBaseline) -> None:
+        """Insert or update a metric baseline."""
+        self.conn.execute(
+            """INSERT INTO metric_baselines(service_name, metric, mean, stddev, sample_count, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(service_name, metric)
+               DO UPDATE SET mean=excluded.mean, stddev=excluded.stddev,
+                             sample_count=excluded.sample_count, updated_at=excluded.updated_at""",
+            (
+                baseline.service_name,
+                baseline.metric,
+                baseline.mean,
+                baseline.stddev,
+                baseline.sample_count,
+                _iso(baseline.updated_at),
+            ),
+        )
+        self.conn.commit()
+
+    def get_baseline(self, service_name: str, metric: str) -> MetricBaseline | None:
+        """Get the current baseline for a service metric."""
+        cur = self.conn.execute(
+            "SELECT service_name, metric, mean, stddev, sample_count, updated_at "
+            "FROM metric_baselines WHERE service_name=? AND metric=?",
+            (service_name, metric),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return MetricBaseline(
+            service_name=row[0],
+            metric=row[1],
+            mean=row[2],
+            stddev=row[3],
+            sample_count=row[4],
+            updated_at=datetime.fromisoformat(row[5]),
+        )
+
+    def list_baselines(self, service_name: str) -> list[MetricBaseline]:
+        """List all baselines for a service."""
+        cur = self.conn.execute(
+            "SELECT service_name, metric, mean, stddev, sample_count, updated_at "
+            "FROM metric_baselines WHERE service_name=? ORDER BY metric",
+            (service_name,),
+        )
+        return [
+            MetricBaseline(
+                service_name=r[0], metric=r[1], mean=r[2],
+                stddev=r[3], sample_count=r[4],
+                updated_at=datetime.fromisoformat(r[5]),
+            )
+            for r in cur.fetchall()
+        ]
+
+    # --- Anomalies ---
+
+    def save_anomaly(self, anomaly: Anomaly) -> None:
+        """Persist a detected anomaly."""
+        self.conn.execute(
+            """INSERT INTO anomalies(service_name, metric, current_value,
+               baseline_mean, baseline_stddev, deviation, detected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                anomaly.service_name,
+                anomaly.metric,
+                anomaly.current_value,
+                anomaly.baseline_mean,
+                anomaly.baseline_stddev,
+                anomaly.deviation,
+                _iso(anomaly.detected_at),
+            ),
+        )
+        self.conn.commit()
+
+    def recent_anomalies(
+        self,
+        service_name: str | None = None,
+        since_minutes: int = 30,
+        limit: int = 50,
+    ) -> list[Anomaly]:
+        """Get recent anomalies, optionally filtered by service."""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+        sql = """
+            SELECT service_name, metric, current_value, baseline_mean,
+                   baseline_stddev, deviation, detected_at
+            FROM anomalies WHERE detected_at >= ?
+        """
+        params: list = [_iso(cutoff)]
+        if service_name:
+            sql += " AND service_name = ?"
+            params.append(service_name)
+        sql += " ORDER BY detected_at DESC LIMIT ?"
+        params.append(limit)
+        cur = self.conn.execute(sql, params)
+        return [
+            Anomaly(
+                service_name=r[0], metric=r[1], current_value=r[2],
+                baseline_mean=r[3], baseline_stddev=r[4], deviation=r[5],
+                detected_at=datetime.fromisoformat(r[6]),
+            )
+            for r in cur.fetchall()
+        ]
+
+    # --- Feedback ---
+
+    def save_feedback(self, fb: Feedback) -> None:
+        """Persist user feedback."""
+        self.conn.execute(
+            """INSERT INTO feedback(target_id, target_type, outcome, context, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (fb.target_id, fb.target_type, fb.outcome, fb.context, _iso(fb.created_at)),
+        )
+        self.conn.commit()
+
+    def list_feedback(
+        self,
+        target_id: str | None = None,
+        limit: int = 50,
+    ) -> list[Feedback]:
+        """List feedback entries, optionally filtered by target."""
+        if target_id:
+            cur = self.conn.execute(
+                "SELECT target_id, target_type, outcome, context, created_at "
+                "FROM feedback WHERE target_id LIKE ? ORDER BY created_at DESC LIMIT ?",
+                (target_id + "%", limit),
+            )
+        else:
+            cur = self.conn.execute(
+                "SELECT target_id, target_type, outcome, context, created_at "
+                "FROM feedback ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [
+            Feedback(
+                target_id=r[0], target_type=r[1], outcome=r[2],
+                context=r[3], created_at=datetime.fromisoformat(r[4]),
+            )
+            for r in cur.fetchall()
+        ]
+
+    # --- Audit Log ---
+
+    def log_audit(self, entry: AuditEntry) -> None:
+        """Record an MCP tool invocation."""
+        self.conn.execute(
+            """INSERT INTO audit_log(tool_name, parameters, result_summary, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (entry.tool_name, entry.parameters, entry.result_summary, _iso(entry.created_at)),
+        )
+        self.conn.commit()
+
+    def query_audit(
+        self,
+        tool_name: str | None = None,
+        since_minutes: int | None = None,
+        limit: int = 50,
+    ) -> list[AuditEntry]:
+        """Query the audit log."""
+        sql = "SELECT tool_name, parameters, result_summary, created_at FROM audit_log WHERE 1=1"
+        params: list = []
+        if tool_name:
+            sql += " AND tool_name = ?"
+            params.append(tool_name)
+        if since_minutes is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+            sql += " AND created_at >= ?"
+            params.append(_iso(cutoff))
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cur = self.conn.execute(sql, params)
+        return [
+            AuditEntry(
+                tool_name=r[0], parameters=r[1], result_summary=r[2],
+                created_at=datetime.fromisoformat(r[3]),
+            )
+            for r in cur.fetchall()
+        ]
 
     # --- Meta ---
 

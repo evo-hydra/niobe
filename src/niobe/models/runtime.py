@@ -71,3 +71,49 @@ class LogEntry:
     raw_line: str
     timestamp: datetime | None = None
     ingested_at: datetime = field(default_factory=_now)
+
+
+@dataclass(frozen=True, slots=True)
+class Anomaly:
+    """A detected metric anomaly (value exceeds mean + 2*stddev)."""
+
+    service_name: str
+    metric: str
+    current_value: float
+    baseline_mean: float
+    baseline_stddev: float
+    deviation: float  # how many stddevs above/below mean
+    detected_at: datetime = field(default_factory=_now)
+
+
+@dataclass(frozen=True, slots=True)
+class MetricBaseline:
+    """Rolling baseline statistics for a service metric."""
+
+    service_name: str
+    metric: str
+    mean: float
+    stddev: float
+    sample_count: int
+    updated_at: datetime = field(default_factory=_now)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEntry:
+    """A record of an MCP tool invocation."""
+
+    tool_name: str
+    parameters: str  # JSON-serialized params
+    result_summary: str
+    created_at: datetime = field(default_factory=_now)
+
+
+@dataclass(frozen=True, slots=True)
+class Feedback:
+    """User feedback on a snapshot or comparison."""
+
+    target_id: str  # snapshot_id or comparison key
+    target_type: str  # "snapshot" or "comparison"
+    outcome: str  # "accepted", "rejected", "modified"
+    context: str = ""
+    created_at: datetime = field(default_factory=_now)
