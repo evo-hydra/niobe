@@ -22,7 +22,7 @@ def create_server(config: NiobeConfig | None = None):
     """
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("niobe", description="Runtime intelligence for AI agents")
+    mcp = FastMCP("niobe", instructions="Runtime intelligence for AI agents")
     _config = config or NiobeConfig.load()
 
     @mcp.tool()
