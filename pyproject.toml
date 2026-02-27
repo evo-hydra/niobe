@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "niobe"
+version = "0.1.0"
+description = "Runtime intelligence for AI agents — local-first runtime observation via MCP"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "evo-hydra"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "psutil>=5.9",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+watch = ["watchfiles>=0.21"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+niobe = "niobe.cli.app:main"
+niobe-mcp = "niobe.mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/evo-hydra/niobe"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/niobe"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "PLW"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["niobe"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["niobe"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+    "if __name__",
+    "def main",
+]
+omit = [
+    "src/niobe/mcp/__main__.py",
+    "src/niobe/mcp/server.py",
+]
