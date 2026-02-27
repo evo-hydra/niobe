@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "niobe"
-version = "0.1.0"
+version = "0.2.0"
 description = "Runtime intelligence for AI agents — local-first runtime observation via MCP"
 readme = "README.md"
 license = {text = "MIT"}
