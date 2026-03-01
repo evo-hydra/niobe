@@ -126,9 +126,19 @@ All values can be overridden with `NIOBE_*` environment variables.
 - **Frozen dataclasses** — immutable models, no Pydantic dependency
 - **Snapshot-based** — no background monitoring, entirely on-demand
 
-## Part of the EvoIntel Stack
+## Part of the EvoIntel MCP Suite
 
-Niobe is Phase 2, after [Seraph](https://pypi.org/project/seraph-reader/), [Sentinel](https://pypi.org/project/sentinel-scanner/), and [Anno](https://github.com/evo-hydra/anno).
+Niobe solves **AI Blindness #2: Runtime Behavior** — CPU, memory, error rates, and log patterns that no model can observe from code alone.
+
+Part of the [EvoIntel MCP Suite](https://evolvingintelligence.ai) by Evolving Intelligence AI: five tools for five blindnesses no model improvement will ever fix.
+
+| Tool | Blindness | Install |
+|------|-----------|---------|
+| [Sentinel](https://github.com/evo-hydra/sentinel) | Project History | `pip install git-sentinel` |
+| **Niobe** | Runtime Behavior | `pip install niobe` |
+| [Merovingian](https://github.com/evo-hydra/merovingian) | Cross-Service Dependencies | `pip install merovingian` |
+| [Seraph](https://github.com/evo-hydra/seraph) | Code Quality | `pip install seraph-ai` |
+| [Anno](https://github.com/evo-hydra/anno) | Web Content | `npm install -g @evointel/anno` |
 
 ## License
 
