@@ -12,11 +12,6 @@ Take snapshot A → deploy → snapshot B → diff. That's it.
 pip install niobe
 ```
 
-With MCP server support:
-```bash
-pip install niobe[mcp]
-```
-
 ## Quick Start
 
 ```bash

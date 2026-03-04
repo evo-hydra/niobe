@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "niobe"
-version = "0.2.0"
+version = "0.2.1"
 description = "Runtime intelligence for AI agents — local-first runtime observation via MCP"
 readme = "README.md"
 license = {text = "MIT"}
@@ -24,10 +24,10 @@ dependencies = [
     "rich>=13",
     "psutil>=5.9",
     "tomli>=2.0; python_version < '3.11'",
+    "mcp>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
 watch = ["watchfiles>=0.21"]
 dev = [
     "pytest>=8",
