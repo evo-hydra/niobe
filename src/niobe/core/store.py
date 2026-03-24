@@ -7,6 +7,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from niobe.models import (
     Anomaly,
@@ -20,6 +21,18 @@ from niobe.models import (
 )
 
 logger = logging.getLogger("niobe.store")
+
+
+def _safe_json_loads(raw: str | None, default: Any = None, context: str = "") -> Any:
+    """Parse JSON from a database column, returning default on failure."""
+    if raw is None:
+        return default if default is not None else []
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Corrupt JSON in DB column%s: %s", f" ({context})" if context else "", raw[:100])
+        return default if default is not None else []
+
 
 SCHEMA_VERSION = "2"
 
@@ -221,7 +234,9 @@ def _metrics_to_json(m: ProcessMetrics | None) -> str | None:
 def _metrics_from_json(s: str | None) -> ProcessMetrics | None:
     if s is None:
         return None
-    d = json.loads(s)
+    d = _safe_json_loads(s, default=None, context="metrics")
+    if d is None:
+        return None
     return ProcessMetrics(
         pid=d["pid"],
         status=d["status"],
@@ -333,7 +348,7 @@ class NiobeStore:
             name=row[0],
             pid=row[1],
             port=row[2],
-            log_paths=tuple(json.loads(row[3])),
+            log_paths=tuple(_safe_json_loads(row[3], default=[], context="service.log_paths")),
             registered_at=datetime.fromisoformat(row[4]),
         )
 
