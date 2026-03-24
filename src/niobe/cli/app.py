@@ -117,7 +117,11 @@ def snapshot(
                 raise typer.Exit(1)
             snaps = [create_snapshot(store, svc, config)]
         else:
-            snaps = create_all_snapshots(store, config)
+            batch = create_all_snapshots(store, config)
+            snaps = batch.snapshots
+            if batch.failures:
+                for name, err in batch.failures:
+                    console.print(f"[yellow]⚠ {name}:[/yellow] {err}")
 
     if not snaps:
         console.print("[dim]No services to snapshot.[/dim]")

@@ -96,10 +96,27 @@ def create_server(config: NiobeConfig | None = None):
                     snap = create_snapshot(store, svc, _config)
                     result = format_snapshots([snap])
                 else:
-                    snaps = create_all_snapshots(store, _config)
-                    if not snaps:
+                    batch = create_all_snapshots(store, _config)
+                    if batch.total_services == 0:
                         return "No services registered. Use niobe_register first."
-                    result = format_snapshots(snaps)
+                    if not batch.snapshots and batch.failures:
+                        # All services failed
+                        fail_details = "; ".join(
+                            f"{name}: {err}" for name, err in batch.failures[:5]
+                        )
+                        return (
+                            f"All {batch.total_services} services failed to snapshot. "
+                            f"Errors: {fail_details}"
+                        )
+                    result = format_snapshots(batch.snapshots)
+                    if batch.failures:
+                        fail_details = "; ".join(
+                            f"{name}: {err}" for name, err in batch.failures[:5]
+                        )
+                        result += (
+                            f"\n\n⚠ {len(batch.failures)}/{batch.total_services} "
+                            f"services failed: {fail_details}"
+                        )
                 _audit(store, "niobe_snapshot", {"service": service}, result)
                 return result
         except (sqlite3.Error, OSError) as exc:

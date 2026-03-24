@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from niobe.config import NiobeConfig
-from niobe.core.snapshot import compare_snapshots, create_snapshot
+from niobe.core.snapshot import compare_snapshots, create_all_snapshots, create_snapshot
 from niobe.core.store import NiobeStore
 from niobe.models.runtime import HealthSnapshot, ProcessMetrics, ServiceInfo
 
@@ -90,3 +90,53 @@ class TestCompareSnapshots:
         store.save_snapshot(s2)
         diff = compare_snapshots(store, "x" * 32, "y" * 32)
         assert diff is None
+
+
+class TestCreateAllSnapshots:
+    @patch("niobe.core.snapshot.capture_metrics")
+    def test_partial_failure_reports_both(self, mock_capture, store):
+        """Partial failure returns successful snapshots AND failure details."""
+        svc_good = ServiceInfo(name="good", pid=1000)
+        svc_bad = ServiceInfo(name="bad", pid=2000)
+        store.register_service(svc_good)
+        store.register_service(svc_bad)
+
+        def side_effect(svc, **kwargs):
+            if svc.name == "bad":
+                raise RuntimeError("process gone")
+            return ProcessMetrics(
+                pid=svc.pid, status="running", cpu_percent=1.0,
+                memory_mb=10.0, num_threads=1, num_connections=0,
+            )
+
+        mock_capture.side_effect = side_effect
+
+        result = create_all_snapshots(store)
+        assert len(result.snapshots) == 1
+        assert result.snapshots[0].service_name == "good"
+        assert len(result.failures) == 1
+        assert result.failures[0][0] == "bad"
+        assert "process gone" in result.failures[0][1]
+        assert result.total_services == 2
+
+    @patch("niobe.core.snapshot.capture_metrics")
+    def test_all_succeed(self, mock_capture, store):
+        """All services succeed — no failures in result."""
+        svc = ServiceInfo(name="web", pid=1234)
+        store.register_service(svc)
+        mock_capture.return_value = ProcessMetrics(
+            pid=1234, status="running", cpu_percent=1.0,
+            memory_mb=10.0, num_threads=1, num_connections=0,
+        )
+
+        result = create_all_snapshots(store)
+        assert len(result.snapshots) == 1
+        assert result.failures == []
+        assert result.total_services == 1
+
+    def test_no_services_returns_empty(self, store):
+        """No services registered — empty result with total_services=0."""
+        result = create_all_snapshots(store)
+        assert result.snapshots == []
+        assert result.failures == []
+        assert result.total_services == 0

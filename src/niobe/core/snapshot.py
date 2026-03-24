@@ -10,6 +10,8 @@ from niobe.config import IngestionConfig, NiobeConfig, SnapshotConfig
 from niobe.core.ingester import ingest_once
 from niobe.core.monitor import capture_metrics
 from niobe.core.store import NiobeStore
+from dataclasses import dataclass, field
+
 from niobe.models.runtime import HealthSnapshot, ServiceInfo, SnapshotDiff
 
 logger = logging.getLogger("niobe.snapshot")
@@ -65,20 +67,34 @@ def create_snapshot(
     return snap
 
 
+@dataclass
+class SnapshotBatchResult:
+    """Result of snapshotting all services, including failures."""
+
+    snapshots: list[HealthSnapshot] = field(default_factory=list)
+    failures: list[tuple[str, str]] = field(default_factory=list)  # (service_name, error)
+    total_services: int = 0
+
+
 def create_all_snapshots(
     store: NiobeStore,
     config: NiobeConfig | None = None,
-) -> list[HealthSnapshot]:
-    """Take snapshots for all registered services."""
+) -> SnapshotBatchResult:
+    """Take snapshots for all registered services.
+
+    Returns a SnapshotBatchResult with both successful snapshots and
+    failure details so callers can report partial results transparently.
+    """
     services = store.list_services()
-    results = []
+    result = SnapshotBatchResult(total_services=len(services))
     for svc in services:
         try:
             snap = create_snapshot(store, svc, config)
-            results.append(snap)
-        except Exception:
+            result.snapshots.append(snap)
+        except Exception as exc:
             logger.exception("Failed to snapshot service %s", svc.name)
-    return results
+            result.failures.append((svc.name, str(exc)))
+    return result
 
 
 def compare_snapshots(
