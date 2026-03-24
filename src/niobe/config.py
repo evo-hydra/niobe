@@ -40,6 +40,7 @@ class McpConfig:
     """Defaults for MCP tool parameters."""
 
     default_error_since_minutes: int = 5
+    default_anomaly_since_minutes: int = 30
     default_query_limit: int = 50
 
 
@@ -136,6 +137,15 @@ class NiobeConfig:
                     mcp_data.get(
                         "default_error_since_minutes",
                         _mcp_defaults.default_error_since_minutes,
+                    ),
+                )
+            ),
+            default_anomaly_since_minutes=int(
+                os.environ.get(
+                    "NIOBE_DEFAULT_ANOMALY_SINCE_MINUTES",
+                    mcp_data.get(
+                        "default_anomaly_since_minutes",
+                        _mcp_defaults.default_anomaly_since_minutes,
                     ),
                 )
             ),

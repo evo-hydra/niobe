@@ -204,7 +204,7 @@ def create_server(config: NiobeConfig | None = None):
         """
         from niobe.core.store import NiobeStore
 
-        since_val = since if since is not None else 30
+        since_val = since if since is not None else _config.mcp.default_anomaly_since_minutes
         limit_val = limit if limit is not None else _config.mcp.default_query_limit
 
         try:
