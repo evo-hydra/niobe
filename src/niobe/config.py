@@ -6,10 +6,28 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import logging
+from typing import TypeVar
+
 try:
     import tomllib  # 3.11+
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T", int, float)
+
+
+def _safe_numeric(value: object, type_fn: type[T], env_name: str, default: T) -> T:
+    """Convert a config value to int or float, falling back to default on error."""
+    try:
+        return type_fn(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid value for %s: %r (expected %s, using default %s)",
+            env_name, value, type_fn.__name__, default,
+        )
+        return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,70 +111,77 @@ class NiobeConfig:
         )
 
         ingestion = IngestionConfig(
-            tail_lines=int(
+            tail_lines=_safe_numeric(
                 os.environ.get(
                     "NIOBE_TAIL_LINES",
                     ingestion_data.get("tail_lines", _ingest_defaults.tail_lines),
-                )
+                ),
+                int, "NIOBE_TAIL_LINES", _ingest_defaults.tail_lines,
             ),
-            max_line_length=int(
+            max_line_length=_safe_numeric(
                 os.environ.get(
                     "NIOBE_MAX_LINE_LENGTH",
                     ingestion_data.get(
                         "max_line_length", _ingest_defaults.max_line_length
                     ),
-                )
+                ),
+                int, "NIOBE_MAX_LINE_LENGTH", _ingest_defaults.max_line_length,
             ),
         )
 
         snapshot = SnapshotConfig(
-            error_window_minutes=int(
+            error_window_minutes=_safe_numeric(
                 os.environ.get(
                     "NIOBE_ERROR_WINDOW_MINUTES",
                     snapshot_data.get(
                         "error_window_minutes",
                         _snap_defaults.error_window_minutes,
                     ),
-                )
+                ),
+                int, "NIOBE_ERROR_WINDOW_MINUTES", _snap_defaults.error_window_minutes,
             ),
-            cpu_sample_interval=float(
+            cpu_sample_interval=_safe_numeric(
                 os.environ.get(
                     "NIOBE_CPU_SAMPLE_INTERVAL",
                     snapshot_data.get(
                         "cpu_sample_interval",
                         _snap_defaults.cpu_sample_interval,
                     ),
-                )
+                ),
+                float, "NIOBE_CPU_SAMPLE_INTERVAL", _snap_defaults.cpu_sample_interval,
             ),
         )
 
         mcp = McpConfig(
-            default_error_since_minutes=int(
+            default_error_since_minutes=_safe_numeric(
                 os.environ.get(
                     "NIOBE_DEFAULT_ERROR_SINCE_MINUTES",
                     mcp_data.get(
                         "default_error_since_minutes",
                         _mcp_defaults.default_error_since_minutes,
                     ),
-                )
+                ),
+                int, "NIOBE_DEFAULT_ERROR_SINCE_MINUTES", _mcp_defaults.default_error_since_minutes,
             ),
-            default_anomaly_since_minutes=int(
+            default_anomaly_since_minutes=_safe_numeric(
                 os.environ.get(
                     "NIOBE_DEFAULT_ANOMALY_SINCE_MINUTES",
                     mcp_data.get(
                         "default_anomaly_since_minutes",
                         _mcp_defaults.default_anomaly_since_minutes,
                     ),
-                )
+                ),
+                int, "NIOBE_DEFAULT_ANOMALY_SINCE_MINUTES", _mcp_defaults.default_anomaly_since_minutes,
             ),
-            default_query_limit=int(
+            default_query_limit=_safe_numeric(
                 os.environ.get(
                     "NIOBE_DEFAULT_QUERY_LIMIT",
                     mcp_data.get(
                         "default_query_limit",
                         _mcp_defaults.default_query_limit,
                     ),
-                )
+                ),
+                int, "NIOBE_DEFAULT_QUERY_LIMIT", _mcp_defaults.default_query_limit,
             ),
         )
 
